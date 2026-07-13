@@ -1,7 +1,7 @@
 --[[
     Proton Core - Sistema de Cheats para Murder Mystery 2
-    GitHub: seu-usuario/ProtonCore
-    Versão: 2.1
+    GitHub: DavizeraXxx/Proton-Cheats
+    Versão: 2.2
 ]]
 
 local ProtonCore = {
@@ -20,7 +20,9 @@ local ProtonCore = {
     AimbotOldFireServer = nil,
     FOVCircle = nil,
     FOVUpdateConnection = nil,
-    Initialized = false
+    Initialized = false,
+    ESPEnabled = false,
+    GunESPEnabled = false
 }
 
 -- Serviços
@@ -70,6 +72,7 @@ function ProtonCore:UpdateNoclip()
                 end
             end
         end)
+        self:Notify("Noclip ativado!", 2)
     else
         if self.Connections.Noclip then 
             self.Connections.Noclip:Disconnect() 
@@ -83,6 +86,7 @@ function ProtonCore:UpdateNoclip()
                 end
             end
         end
+        self:Notify("Noclip desativado!", 2)
     end
 end
 
@@ -90,31 +94,43 @@ end
 -- ESP
 -- ======================
 function ProtonCore:UpdateESP()
+    self:Notify("Atualizando ESP...", 2)
+    
     -- Limpar ESP antigo
     for _, plr in ipairs(Players:GetPlayers()) do
         self:RemoveHighlights(plr)
     end
     
+    -- Se nenhum ESP estiver ativo, para aqui
     if not self.Options.ESPSheriff and not self.Options.ESPMurder then 
+        self.ESPEnabled = false
         return 
     end
 
+    self.ESPEnabled = true
+
+    -- Conectar eventos de entrada/saída de jogadores
     if self.Connections.ESPPlayerAdded then self.Connections.ESPPlayerAdded:Disconnect() end
     if self.Connections.ESPPlayerRemoving then self.Connections.ESPPlayerRemoving:Disconnect() end
 
     self.Connections.ESPPlayerAdded = Players.PlayerAdded:Connect(function(plr)
+        task.wait(0.5) -- Aguardar o personagem carregar
         self:ApplyESPToPlayer(plr)
-        plr.CharacterAdded:Connect(function() self:ApplyESPToPlayer(plr) end)
     end)
     
     self.Connections.ESPPlayerRemoving = Players.PlayerRemoving:Connect(function(plr)
         self:RemoveHighlights(plr)
     end)
 
+    -- Aplicar ESP para todos os jogadores já existentes
     for _, plr in ipairs(Players:GetPlayers()) do
-        self:ApplyESPToPlayer(plr)
-        plr.CharacterAdded:Connect(function() self:ApplyESPToPlayer(plr) end)
+        if plr ~= LocalPlayer then
+            task.wait(0.1)
+            self:ApplyESPToPlayer(plr)
+        end
     end
+    
+    self:Notify("ESP atualizado!", 2)
 end
 
 function ProtonCore:ApplyESPToPlayer(player)
@@ -124,32 +140,60 @@ function ProtonCore:ApplyESPToPlayer(player)
     if not team then return end
     
     local color
+    local shouldApply = false
+    
     if team.Name == "Sheriff" and self.Options.ESPSheriff then
         color = Color3.fromRGB(0, 100, 255)
+        shouldApply = true
     elseif team.Name == "Murderer" and self.Options.ESPMurder then
         color = Color3.fromRGB(255, 0, 0)
-    else
+        shouldApply = true
+    end
+    
+    if not shouldApply then return end
+    
+    -- Aguardar o personagem carregar
+    local char = player.Character
+    if not char then
+        player.CharacterAdded:Connect(function(newChar)
+            task.wait(0.5)
+            self:ApplyESPToPlayer(player)
+        end)
         return
     end
     
-    local char = player.Character
-    if not char then return end
+    -- Verificar se o personagem tem partes
+    if not char:FindFirstChild("Head") then return end
     
+    -- Remover ESP antigo se existir
+    self:RemoveHighlights(player)
+    
+    -- Criar novo Highlight
     local highlight = Instance.new("Highlight")
     highlight.FillColor = color
-    highlight.OutlineColor = Color3.new(1, 1, 1)
+    highlight.OutlineColor = Color3.fromRGB(255, 255, 255)
     highlight.FillTransparency = 0.3
+    highlight.OutlineTransparency = 0.2
     highlight.Adornee = char
+    highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
     
-    local folder = player:FindFirstChild("ProtonESP") or Instance.new("Folder")
-    folder.Name = "ProtonESP"
-    folder.Parent = player
+    -- Armazenar em uma pasta
+    local folder = player:FindFirstChild("ProtonESP") 
+    if not folder then
+        folder = Instance.new("Folder")
+        folder.Name = "ProtonESP"
+        folder.Parent = player
+    end
     highlight.Parent = folder
+    
+    print("[ESP] Aplicado para:", player.Name, "Time:", team.Name)
 end
 
 function ProtonCore:RemoveHighlights(player)
     local folder = player:FindFirstChild("ProtonESP")
-    if folder then folder:Destroy() end
+    if folder then 
+        folder:Destroy() 
+    end
 end
 
 -- ======================
@@ -157,20 +201,37 @@ end
 -- ======================
 function ProtonCore:UpdateGunESP()
     if self.Options.ESPGun then
+        self.GunESPEnabled = true
         if self.Connections.GunESP then self.Connections.GunESP:Disconnect() end
+        
+        self:Notify("Gun ESP ativado!", 2)
+        
         self.Connections.GunESP = RunService.Heartbeat:Connect(function()
             for _, tool in ipairs(workspace:GetChildren()) do
-                if tool:IsA("Tool") and tool.Name:lower():find("gun") and not tool:FindFirstChild("ProtonGunESP") then
-                    local h = Instance.new("Highlight", tool)
-                    h.Name = "ProtonGunESP"
-                    h.FillColor = Color3.fromRGB(255, 255, 0)
-                    h.OutlineColor = Color3.new(0, 0, 0)
-                    h.FillTransparency = 0.3
-                    h.Adornee = tool
+                if tool:IsA("Tool") and tool:FindFirstChild("Handle") then
+                    -- Verificar se a arma está no chão (não está em um jogador)
+                    local isInPlayer = false
+                    for _, plr in ipairs(Players:GetPlayers()) do
+                        if plr.Character and tool:IsDescendantOf(plr.Character) then
+                            isInPlayer = true
+                            break
+                        end
+                    end
+                    
+                    if not isInPlayer and not tool:FindFirstChild("ProtonGunESP") then
+                        local h = Instance.new("Highlight", tool)
+                        h.Name = "ProtonGunESP"
+                        h.FillColor = Color3.fromRGB(255, 255, 0)
+                        h.OutlineColor = Color3.fromRGB(255, 255, 255)
+                        h.FillTransparency = 0.3
+                        h.Adornee = tool
+                        h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+                    end
                 end
             end
         end)
     else
+        self.GunESPEnabled = false
         if self.Connections.GunESP then 
             self.Connections.GunESP:Disconnect() 
             self.Connections.GunESP = nil 
@@ -179,6 +240,7 @@ function ProtonCore:UpdateGunESP()
             local h = tool:FindFirstChild("ProtonGunESP")
             if h then h:Destroy() end
         end
+        self:Notify("Gun ESP desativado!", 2)
     end
 end
 
@@ -188,12 +250,15 @@ end
 function ProtonCore:StartAimbotHook()
     if self.AimbotHooked then return end
     
-    local remote
-    local possibleNames = {"ShootEvent", "GunEvent", "Fire", "RemoteShoot", "FireGun"}
+    self:Notify("Procurando RemoteEvent de tiro...", 3)
     
+    local remote
+    local possibleNames = {"ShootEvent", "GunEvent", "Fire", "RemoteShoot", "FireGun", "Shoot", "FireRemote"}
+    
+    -- Procurar em ReplicatedStorage
     for _, name in ipairs(possibleNames) do
         for _, obj in ipairs(ReplicatedStorage:GetDescendants()) do
-            if obj:IsA("RemoteEvent") and obj.Name:lower():find(name:lower()) then
+            if obj:IsA("RemoteEvent") and string.lower(obj.Name):find(string.lower(name)) then
                 remote = obj
                 break
             end
@@ -201,11 +266,25 @@ function ProtonCore:StartAimbotHook()
         if remote then break end
     end
     
+    -- Se não encontrou, procurar em todo o jogo
     if not remote then
-        self:Notify("Remote de tiro não encontrado. Tente usar a arma primeiro.", 4)
+        for _, name in ipairs(possibleNames) do
+            for _, obj in ipairs(game:GetDescendants()) do
+                if obj:IsA("RemoteEvent") and string.lower(obj.Name):find(string.lower(name)) then
+                    remote = obj
+                    break
+                end
+            end
+            if remote then break end
+        end
+    end
+    
+    if not remote then
+        self:Notify("Remote de tiro não encontrado.", 4)
         return
     end
     
+    self:Notify("Remote encontrado: " .. remote.Name, 3)
     self.AimbotRemote = remote
     local oldFire = remote.FireServer
     self.AimbotOldFireServer = oldFire
@@ -216,6 +295,7 @@ function ProtonCore:StartAimbotHook()
         if selfRef.Options.Aimbot then
             local target = selfRef.Options.TargetPlayer
             
+            -- Se não tem alvo específico, procura automaticamente
             if not target then
                 local myChar = LocalPlayer.Character
                 if myChar and myChar:FindFirstChild("Head") then
@@ -223,10 +303,11 @@ function ProtonCore:StartAimbotHook()
                     local bestDist = math.huge
                     
                     for _, plr in ipairs(Players:GetPlayers()) do
-                        if plr ~= LocalPlayer and plr.Team then
+                        if plr ~= LocalPlayer then
                             local char = plr.Character
                             if char and char:FindFirstChild("Head") then
-                                local pos, onScreen = Camera:WorldToScreenPoint(char.Head.Position)
+                                local headPos = char.Head.Position
+                                local pos, onScreen = Camera:WorldToScreenPoint(headPos)
                                 if onScreen then
                                     local center = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)
                                     local d = (Vector2.new(pos.X, pos.Y) - center).Magnitude
@@ -242,6 +323,7 @@ function ProtonCore:StartAimbotHook()
                 end
             end
             
+            -- Se encontrou alvo, modifica os argumentos para mirar na cabeça
             if target and target.Character and target.Character:FindFirstChild("Head") then
                 local headPos = target.Character.Head.Position
                 for i, v in ipairs(args) do
@@ -256,7 +338,7 @@ function ProtonCore:StartAimbotHook()
     end
     
     self.AimbotHooked = true
-    self:Notify("Aimbot pronto (use a arma para testar)", 3)
+    self:Notify("Aimbot pronto! 🎯", 3)
 end
 
 function ProtonCore:UpdateAimbotVisual()
@@ -270,13 +352,16 @@ function ProtonCore:UpdateAimbotVisual()
                 circle.Filled = false
                 circle.Radius = self.Options.AimbotFOV
                 circle.Position = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)
+                circle.Visible = true
                 self.FOVCircle = circle
+                self:Notify("Círculo FOV criado!", 2)
             else
                 self:Notify("Drawing não disponível", 3)
             end
         end
         if self.FOVCircle then 
             self.FOVCircle.Visible = true 
+            self.FOVCircle.Radius = self.Options.AimbotFOV
         end
         
         if not self.FOVUpdateConnection then
@@ -321,7 +406,12 @@ function ProtonCore:TeleportSheriffGun()
         return 
     end
     
+    -- Procurar a arma (pode ser Tool ou em Backpack)
     local gun = char:FindFirstChildOfClass("Tool")
+    if not gun and sheriff.Backpack then
+        gun = sheriff.Backpack:FindFirstChildOfClass("Tool")
+    end
+    
     if not gun or not gun:FindFirstChild("Handle") then 
         self:Notify("Arma não encontrada", 2) 
         return 
@@ -333,8 +423,12 @@ function ProtonCore:TeleportSheriffGun()
         return 
     end
     
-    gun.Handle.CFrame = myChar.HumanoidRootPart.CFrame + Vector3.new(0, 2, 0)
-    self:Notify("Arma teleportada!", 2)
+    -- Teleportar a arma para perto do jogador
+    local targetCFrame = myChar.HumanoidRootPart.CFrame + Vector3.new(0, 2, 0)
+    gun.Handle.CFrame = targetCFrame
+    gun.Parent = workspace -- Jogar no chão
+    
+    self:Notify("Arma teleportada! 🚀", 2)
 end
 
 -- ======================
@@ -354,7 +448,8 @@ function ProtonCore:CopyLog()
         end
     end
     
-    copyToClipboard("Sheriff: " .. sheriff .. " | Murderer: " .. murder)
+    local logText = "Sheriff: " .. sheriff .. " | Murderer: " .. murder
+    copyToClipboard(logText)
 end
 
 -- ======================
@@ -365,6 +460,7 @@ function ProtonCore:ConnectUI(ui)
     
     -- Conectar eventos da UI com as funções do Core
     ui.OnToggleChange = function(name, state)
+        print("[UI → Core] Toggle:", name, state)
         self.Options[name] = state
         
         if name == "Noclip" then
@@ -373,12 +469,18 @@ function ProtonCore:ConnectUI(ui)
             self:UpdateESP()
         elseif name == "Aimbot" then
             self:UpdateAimbotVisual()
+            if state then
+                self:Notify("Aimbot ativado! 🎯", 2)
+            else
+                self:Notify("Aimbot desativado!", 2)
+            end
         elseif name == "ESPGun" then
             self:UpdateGunESP()
         end
     end
     
     ui.OnSliderChange = function(name, value)
+        print("[UI → Core] Slider:", name, value)
         if name == "AimbotFOV" then
             self.Options.AimbotFOV = value
             self:UpdateAimbotVisual()
@@ -386,6 +488,7 @@ function ProtonCore:ConnectUI(ui)
     end
     
     ui.OnButtonClick = function(name)
+        print("[UI → Core] Button:", name)
         if name == "TeleportSheriffGun" then
             self:TeleportSheriffGun()
         elseif name == "CopyLog" then
@@ -394,7 +497,9 @@ function ProtonCore:ConnectUI(ui)
     end
     
     ui.OnPlayerSelect = function(player)
+        print("[UI → Core] Player selecionado:", player.Name)
         self.Options.TargetPlayer = player
+        self:Notify("Alvo: " .. player.Name, 2)
     end
     
     -- Sincronizar estado inicial
@@ -405,7 +510,7 @@ function ProtonCore:ConnectUI(ui)
     end
     
     self.Initialized = true
-    self:Notify("Proton Core conectado à UI!", 2)
+    self:Notify("Proton Core conectado à UI! ✅", 2)
 end
 
 -- ======================
@@ -417,11 +522,14 @@ function ProtonCore:Start()
         return
     end
     
-    -- Iniciar cheats que não dependem da UI
+    self:Notify("Iniciando Proton Core...", 2)
+    
+    -- Iniciar cheats
     self:StartAimbotHook()
     
     self.Initialized = true
     print("[ProtonCore] Iniciado com sucesso!")
+    self:Notify("Proton Core pronto! 🚀", 2)
 end
 
 -- ======================
@@ -453,6 +561,12 @@ function ProtonCore:Cleanup()
         self:RemoveHighlights(plr)
     end
     
+    -- Limpar Gun ESP
+    for _, tool in ipairs(workspace:GetChildren()) do
+        local h = tool:FindFirstChild("ProtonGunESP")
+        if h then h:Destroy() end
+    end
+    
     -- Restaurar Collisions
     local char = LocalPlayer.Character
     if char then
@@ -464,7 +578,7 @@ function ProtonCore:Cleanup()
     end
     
     self.Initialized = false
-    self:Notify("Proton Core limpo!", 2)
+    self:Notify("Proton Core limpo! 🧹", 2)
 end
 
 return ProtonCore
