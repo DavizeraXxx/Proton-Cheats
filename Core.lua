@@ -1,7 +1,7 @@
 --[[
     Proton Core - Sistema de Cheats
     GitHub: DavizeraXxx/Proton-Cheats
-    Versão: 4.0
+    Versão: 4.3
 ]]
 
 local ProtonCore = {
@@ -22,7 +22,13 @@ local ProtonCore = {
     ESPTexts = {},
     Connections = {},
     Initialized = false,
-    UI = nil
+    UI = nil,
+    AimbotHooked = false,
+    SilentAIMEnabled = false,
+    Roles = {
+        Murderer = nil,
+        Sheriff = nil
+    }
 }
 
 -- Serviços
@@ -58,7 +64,7 @@ function ProtonCore:GetTeam(player)
 end
 
 -- ======================
--- ESP
+-- ESP (MANTIDO)
 -- ======================
 function ProtonCore:GetCorners(part)
     local cf, sz = part.CFrame, part.Size / 2
@@ -174,33 +180,115 @@ function ProtonCore:UpdateESP()
 end
 
 -- ======================
--- AIMBOT
+-- SILENT AIM (DO SCRIPT QUE VOCÊ ENVIOU)
 -- ======================
-function ProtonCore:GetClosestMurderer()
-    local closest = nil
-    local minDist = self.Options.AimbotFOV
+function ProtonCore:GetClosestPlayer()
+    local ClosestPlayer = nil
+    local FarthestDistance = self.Options.AimbotFOV or 100
+
+    for _, v in ipairs(Players:GetPlayers()) do
+        if v ~= LocalPlayer then
+            pcall(function()
+                if v.Character and v.Character:FindFirstChild("PrimaryPart") then
+                    local DistanceFromPlayer = (LocalPlayer.Character.PrimaryPart.Position - v.Character.PrimaryPart.Position).Magnitude
+                    if DistanceFromPlayer < FarthestDistance then
+                        FarthestDistance = DistanceFromPlayer
+                        ClosestPlayer = v
+                    end
+                end
+            end)
+        end
+    end
+
+    return ClosestPlayer
+end
+
+function ProtonCore:SetupSilentAim()
+    if self.AimbotHooked then return end
     
-    for _, player in pairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild("Head") then
-            local teamName, _ = self:GetTeam(player)
-            if teamName == "Murderer" then
-                local head = player.Character.Head
-                local sp, ov = Camera:WorldToViewportPoint(head.Position)
-                if ov then
-                    local center = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)
-                    local d = (Vector2.new(sp.X, sp.Y) - center).Magnitude
-                    if d < minDist then
-                        minDist = d
-                        closest = player
+    -- Raycast Parameters
+    local RaycastParameters = RaycastParams.new()
+    RaycastParameters.IgnoreWater = true
+    RaycastParameters.FilterType = Enum.RaycastFilterType.Blacklist
+    RaycastParameters.FilterDescendantsInstances = {LocalPlayer.Character}
+    
+    local RawMetatable = getrawmetatable(game)
+    local OldNameCall = RawMetatable.__namecall
+    setreadonly(RawMetatable, false)
+    
+    local selfRef = self
+    
+    RawMetatable.__namecall = newcclosure(function(Object, ...)
+        local NamecallMethod = getnamecallmethod()
+        local Arguments = {...}
+        
+        -- Verificar se o Silent Aim está ativo
+        if selfRef.Options.Aimbot then
+            RaycastParameters.FilterDescendantsInstances = {LocalPlayer.Character}
+            
+            -- Para arremessos (Throw)
+            if NamecallMethod == "FireServer" and tostring(Object) == "Throw" then
+                local Success, Error = pcall(function()
+                    local Closest = selfRef:GetClosestPlayer()
+                    if Closest and Closest.Character and Closest.Character:FindFirstChild("PrimaryPart") then
+                        local PrimaryPart = Closest.Character.PrimaryPart
+                        local Velocity = PrimaryPart.AssemblyLinearVelocity * Vector3.new(1, 0, 1)
+                        local Magnitude = (PrimaryPart.Position - LocalPlayer.Character.PrimaryPart.Position).Magnitude
+                        local Prediction = Velocity * 0.5 * Magnitude / 100
+                        local Result = workspace.Raycast(workspace, LocalPlayer.Character.PrimaryPart.Position, (PrimaryPart.Position - (LocalPlayer.Character.PrimaryPart.Position + Prediction)).Unit * 200, RaycastParameters)
+                        if Result then
+                            Arguments[2] = Result.Position
+                        end
+                    end
+                end)
+                if not Success then
+                    warn(Error)
+                end
+                
+            -- Para tiros (ShootGun)
+            elseif NamecallMethod == "InvokeServer" and tostring(Object) == "ShootGun" then
+                -- Encontrar o Murderer
+                local Murderer = nil
+                for _, player in ipairs(Players:GetPlayers()) do
+                    if player ~= LocalPlayer then
+                        local team, _ = selfRef:GetTeam(player)
+                        if team == "Murderer" then
+                            Murderer = player
+                            break
+                        end
+                    end
+                end
+                
+                if Murderer and Murderer.Character and Murderer.Character:FindFirstChild("PrimaryPart") then
+                    local Success, Error = pcall(function()
+                        local PrimaryPart = Murderer.Character.PrimaryPart
+                        local Prediction = PrimaryPart.AssemblyLinearVelocity / 40
+                        if math.abs(PrimaryPart.AssemblyLinearVelocity.Y) < 10 then
+                            Arguments[2] = PrimaryPart.Position + Prediction
+                        else
+                            return "Nullify Remote"
+                        end
+                    end)
+                    if not Success then
+                        warn(Error)
+                    elseif Success == "Nullify Remote" then
+                        return
                     end
                 end
             end
         end
-    end
+        
+        return OldNameCall(Object, unpack(Arguments))
+    end)
     
-    return closest
+    setreadonly(RawMetatable, true)
+    self.AimbotHooked = true
+    self:Notify("Silent Aim ativado! 🎯")
 end
 
+-- ======================
+-- FOV CIRCLE
+-- ======================
 function ProtonCore:UpdateFOV()
     if self.Options.Aimbot and self.Options.ShowFOV then
         if not self.FOVCircle then
@@ -326,52 +414,20 @@ function ProtonCore:UpdateNoclip()
 end
 
 -- ======================
--- AIMBOT HOOK
--- ======================
-function ProtonCore:SetupAimbotHook()
-    if self.AimbotHooked then return end
-    
-    local mt = getrawmetatable(game)
-    local oldNamecall = mt.__namecall
-    setreadonly(mt, false)
-    
-    local selfRef = self
-    mt.__namecall = function(self, ...)
-        local args = {...}
-        local method = getnamecallmethod()
-        
-        if method == "FireServer" and selfRef.Options.Aimbot then
-            local target = selfRef:GetClosestMurderer()
-            if target and target.Character and target.Character:FindFirstChild("Head") then
-                for i, arg in pairs(args) do
-                    if typeof(arg) == "Vector3" then
-                        args[i] = target.Character.Head.Position
-                        break
-                    end
-                end
-            end
-        end
-        
-        return oldNamecall(self, unpack(args))
-    end
-    
-    setreadonly(mt, true)
-    self.AimbotHooked = true
-end
-
--- ======================
 -- CONECTAR COM UI
 -- ======================
 function ProtonCore:ConnectUI(ui)
     self.UI = ui
     ui.Callbacks = self
     
-    -- Callbacks da UI
     function self:OnToggle(name, value)
         self.Options[name] = value
         
         if name == "Aimbot" or name == "ShowFOV" then
             self:UpdateFOV()
+            if name == "Aimbot" then
+                self:Notify(value and "Aimbot ativado 🎯" or "Aimbot desativado")
+            end
         elseif name == "ESPEnabled" or name == "ESPBox" or name == "ESPSkeleton" or name == "ESPName" or name == "ESPDistance" then
             -- ESP é atualizado no loop
         elseif name == "Noclip" then
@@ -411,7 +467,7 @@ end
 function ProtonCore:Start()
     if self.Initialized then return end
     
-    self:SetupAimbotHook()
+    self:SetupSilentAim()
     self:UpdateFOV()
     self:UpdateNoclip()
     self:UpdateGunESP()
